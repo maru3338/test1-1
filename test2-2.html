@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>フィンランド語記憶テスト</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; }
+        .question { font-size: 24px; margin-bottom: 20px; }
+        .choices button { display: block; margin: 10px auto; padding: 10px 20px; font-size: 18px; }
+        #nextBtn {
+            margin: 20px auto 0 auto;
+            padding: 10px 20px;
+            font-size: 18px;
+            display: none;
+        }
+        #downloadBtn {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 18px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div style="margin-bottom: 10px;">
+        <label for="subjectId">被験者ID：</label>
+        <input type="text" id="subjectId" placeholder="例: S001">
+    </div>
+    <h1>フィンランド語記憶テスト</h1>
+    <div id="quiz">
+        <div id="questionCounter" style="font-size: 18px; margin-bottom: 10px;"></div>
+        <div class="question" id="question"></div>
+        <div class="choices" id="choices"></div>
+        <button id="nextBtn" onclick="nextQuestion()">次へ</button>
+    </div>
+    <button id="downloadBtn" onclick="downloadCSV()">CSVをダウンロード</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <script>
+        // ここを各ファイルに合わせて固定で埋め込む
+        const SET_NUMBER = 2;
+        const TEST_NUMBER = 2;
+
+        // Excelファイル名（固定）
+        const EXCEL_FILE = "test_set2.xlsx";
+
+        let problems = [];
+        let currentQuestion = 0;
+        let startTime, choiceTime;
+        let selectedChoice = null;
+        let logData = [];
+
+        function loadExcelAndStart() {
+            const req = new XMLHttpRequest();
+            req.open("GET", EXCEL_FILE, true);
+            req.responseType = "arraybuffer";
+
+            req.onload = function(e) {
+                const data = new Uint8Array(req.response);
+                const workbook = XLSX.read(data, {type: "array"});
+                const sheetName = workbook.SheetNames[0];
+                const sheet = workbook.Sheets[sheetName];
+                const json = XLSX.utils.sheet_to_json(sheet, {header:1});
+
+                // 1行目はヘッダー、2行目以降が問題
+                for (let i = 1; i < json.length; i++) {
+                    const row = json[i];
+                    if (row.length >= 6) {
+                        problems.push({
+                            question: row[0],
+                            choices: [row[1], row[2], row[3], row[4]],
+                            correct: row[5]
+                        });
+                    }
+                }
+                showQuestion();
+            };
+
+            req.send();
+        }
+
+        function showQuestion() {
+            const q = problems[currentQuestion];
+            document.getElementById('questionCounter').innerText = `${currentQuestion + 1}問目 / 全${problems.length}問`;
+            document.getElementById('question').innerText = q.question;
+            const choicesDiv = document.getElementById('choices');
+            choicesDiv.innerHTML = '';
+            q.choices.forEach((choice, index) => {
+                const btn = document.createElement('button');
+                btn.innerText = choice;
+                btn.onclick = () => {
+                    selectChoice(index + 1);
+
+                    // 選択ボタンの色変更
+                    const buttons = document.querySelectorAll('#choices button');
+                    buttons.forEach(b => b.style.backgroundColor = ''); // 全部リセット
+                    btn.style.backgroundColor = '#8FBC8F'; // 緑色に変更
+                };
+                choicesDiv.appendChild(btn);
+            });
+            document.getElementById('nextBtn').style.display = 'none';
+            selectedChoice = null;
+            startTime = performance.now();
+        }
+
+        function selectChoice(choiceNumber) {
+            if (selectedChoice !== null) return; // 2回押し防止
+            choiceTime = performance.now();
+            selectedChoice = choiceNumber;
+            document.getElementById('nextBtn').style.display = 'block';
+        }
+
+        function nextQuestion() {
+            const q = problems[currentQuestion];
+            const reactionTime = (choiceTime - startTime) / 1000;
+            const correct = (selectedChoice == q.correct) ? "正解" : "不正解";
+            logData.push({
+                setNumber: SET_NUMBER,
+                testNumber: TEST_NUMBER,
+                questionNumber: currentQuestion + 1,
+                question: q.question,
+                choices: q.choices.join(','),
+                selectedChoice: selectedChoice,
+                correctAnswer: q.correct,
+                result: correct,
+                reactionTime: reactionTime.toFixed(3),
+                selectionTimestamp: new Date().toISOString() // 選択時刻
+            });
+
+            currentQuestion++;
+            if (currentQuestion < problems.length) {
+                showQuestion();
+            } else {
+                document.getElementById('quiz').style.display = 'none';
+                document.getElementById('downloadBtn').style.display = 'block';
+            }
+        }
+
+        function downloadCSV() {
+            const subjectId = document.getElementById('subjectId').value.trim();
+            if (!subjectId) {
+                alert('被験者IDを入力してください');
+                return;
+            }
+
+            const totalQuestions = logData.length;
+            const correctCount = logData.filter(row => row.result === "正解").length;
+            let csv = `被験者ID,${subjectId}\n`;
+            csv += `得点,${correctCount}/${totalQuestions}\n`;
+            csv += '被験者ID,セット番号,回数番号,問題番号,単語,選択肢,選んだ選択肢,正解番号,正誤,反応時間(秒),選択時刻\n';
+            logData.forEach(row => {
+                csv += `${subjectId},${row.setNumber},${row.testNumber},${row.questionNumber},${row.question},"${row.choices}",${row.selectedChoice},${row.correctAnswer},${row.result},${row.reactionTime},${row.selectionTimestamp}\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `test_log_${subjectId}_set${SET_NUMBER}_test${TEST_NUMBER}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // 初回読み込み
+        loadExcelAndStart();
+    </script>
+</body>
+</html>
